@@ -1,0 +1,106 @@
+Vagrant.configure("2") do |config|
+  config.vm.box = "centos/7"
+
+  # debug port with "sam local invoke"
+  config.vm.network "forwarded_port", guest: 5858, host: 5858
+
+  # forward dynamoDB-local port. (http://localhost:8000/shell/).
+  # comment next line, if you don't want to use dynamoDB-local.
+  config.vm.network "forwarded_port", guest: 8000, host: 8000
+
+  config.vm.network "private_network", ip: "192.168.33.14"
+  config.vm.synced_folder ".", "/vagrant", type: "virtualbox"
+  config.vm.provider "virtualbox" do |vb|
+    vb.gui = false
+    vb.memory = 512
+    vb.cpus = 2
+  end
+
+  config.vm.provision "shell", inline: <<-SHELL
+    ############################
+    # provision as root
+    ############################
+    ## change locale to ja_JP
+    localedef -f UTF-8 -i ja_JP ja_JP
+    localectl set-locale LANG=ja_JP.utf8
+
+    timedatectl set-timezone Asia/Tokyo
+    yum update -y
+    yum install -y git gcc gcc-c++ openssl-devel readline-devel wget zip unzip bzip2-devel sqlite sqlite-devel zlib-devel libffi-devel
+
+    ## install python3.6 as python3 (by epel)
+    yum install -y epel-release
+    yum install -y python36 python36-devel.x86_64
+    ln -s /bin/python36 /bin/python3
+    curl "https://bootstrap.pypa.io/get-pip.py" -o "get-pip.py"
+    python3 get-pip.py
+
+    ## install docker for AWS SAM
+    yum install -y yum-utils device-mapper-persistent-data lvm2
+    yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    yum install -y docker-ce
+    systemctl start docker
+    systemctl enable docker
+  SHELL
+
+  config.vm.provision "shell", privileged: false, inline: <<-SHELL
+    ############################
+    # provision as vagrant
+    ############################
+    ## install anyenv
+    git clone https://github.com/anyenv/anyenv.git ~/.anyenv
+    echo 'export PATH="$HOME/.anyenv/bin:$PATH"' >> $HOME/.bash_profile
+    echo 'eval "$(anyenv init -)"' >> $HOME/.bash_profile
+    source $HOME/.bash_profile
+    anyenv install --force-init
+
+    ## install xxenv(node)
+    anyenv install nodenv
+    source $HOME/.bash_profile
+
+    ## nodejs
+    nodenv install 10.15.3
+    nodenv global 10.15.3
+    nodenv rehash
+    npm install -g npm
+    ## install yarn
+    npm install -g yarn
+    nodenv rehash
+
+    ## aws-cli
+    pip install awscli --user
+    pip install aws-sam-cli --user
+    ## aws_completer
+    echo "complete -C '/home/vagrant/.local/bin/aws_completer' aws" >> $HOME/.bashrc
+
+    ## add vagrant user to docker group
+    sudo gpasswd -a $USER docker
+
+    ## docker run
+    ## comment next line, if you don't want to use dynamoDB-local.
+    sudo docker run --restart=always --name dynamodb-local -p 8000:8000 -d amazon/dynamodb-local -jar DynamoDBLocal.jar -inMemory -sharedDb
+
+    ## create symbolic-link SAM workdir
+    ln -s /vagrant/samdev $HOME/samdev
+
+    ## create shell-script symbolic-link for AWS-CLI with MFA.
+    ln -s /vagrant/getSessionToken.sh $HOME/getSessionToken.sh
+
+    echo "##### VERSIONS #####"
+    echo "python3: `python3 --version`"
+    echo "node: `node --version`"
+    echo "npm: `npm --version`"
+    echo "yarn: `yarn --version`"
+    echo "docker: `docker --version`"
+    echo "AWS-CLI: `aws --version`"
+    echo "SAM-CLI: `sam --version`"
+
+    cat << EOS
+
+###########################################################
+## TODO! "aws configure" and set user settings by yourself.
+###########################################################
+EOS
+
+  SHELL
+end
